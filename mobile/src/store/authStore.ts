@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { User } from '../types';
 import { getToken, setToken, clearToken } from '../services/token';
-import { getMe } from '../services/auth';
+import { api } from '../services/api';
 import { connectSocket, disconnectSocket } from '../services/socket';
 import { useChatStore } from './chatStore';
 
@@ -26,7 +26,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         set({ isLoading: false, isAuthenticated: false });
         return;
       }
-      const user = await getMe();
+      const user = await api.auth.getMe();
       set({ user, isAuthenticated: true, isLoading: false });
     } catch {
       await clearToken();

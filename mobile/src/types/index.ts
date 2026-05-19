@@ -36,8 +36,10 @@ export interface Message {
 }
 
 export type AuthStackParamList = {
-  Phone: undefined;
-  Otp: { phone: string; name: string };
+  Landing: undefined;
+  Login: undefined;
+  Signup: undefined;
+  Otp: { phone: string; name?: string; mode: 'login' | 'signup' };
 };
 
 export type MainStackParamList = {

@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { MainStackParamList, PublicUser } from '../types';
-import { searchUsers, createChat } from '../services/chat';
+import { api } from '../services/api';
 import { getPublicDisplayName } from '../utils/displayName';
 
 type Props = NativeStackScreenProps<MainStackParamList, 'NewChat'>;
@@ -31,7 +31,7 @@ export default function NewChatScreen({ navigation }: Props) {
     setLoading(true);
     setError('');
     try {
-      const result = await searchUsers(text.trim());
+      const result = await api.users.search(text.trim());
       setUsers(result);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Search failed');
@@ -44,7 +44,7 @@ export default function NewChatScreen({ navigation }: Props) {
     setCreating(user._id);
     setError('');
     try {
-      const chat = await createChat(user._id);
+      const chat = await api.chats.create(user._id);
       const title = getPublicDisplayName(user);
       navigation.replace('ChatRoom', { chatId: chat._id, title });
     } catch (e) {

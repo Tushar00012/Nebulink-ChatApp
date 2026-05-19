@@ -12,7 +12,7 @@ import {
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import { MainStackParamList } from '../types';
-import { getChats, hideChat } from '../services/chat';
+import { api } from '../services/api';
 import { useChatStore } from '../store/chatStore';
 import { getPublicDisplayName } from '../utils/displayName';
 
@@ -41,7 +41,7 @@ export default function ChatListScreen({ navigation }: Props) {
     else setLoading(true);
     setError('');
     try {
-      const data = await getChats();
+      const data = await api.chats.list();
       setChats(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load chats');
@@ -72,7 +72,7 @@ export default function ChatListScreen({ navigation }: Props) {
         style: 'destructive',
         onPress: async () => {
           try {
-            await hideChat(item._id);
+            await api.chats.hide(item._id);
             removeChat(item._id);
           } catch (e) {
             Alert.alert('Error', e instanceof Error ? e.message : 'Could not delete chat');

@@ -11,13 +11,13 @@ import {
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../types';
-import { verifyOtp } from '../services/auth';
+import { api } from '../services/api';
 import { useAuthStore } from '../store/authStore';
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'Otp'>;
 
 export default function OtpScreen({ route }: Props) {
-  const { phone, name } = route.params;
+  const { phone, name, mode } = route.params;
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -31,7 +31,7 @@ export default function OtpScreen({ route }: Props) {
     setError('');
     setLoading(true);
     try {
-      const { accessToken, user } = await verifyOtp(phone, code, name);
+      const { accessToken, user } = await api.auth.verifyOtp(phone, code, { mode, name });
       await setAuth(accessToken, user);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Verification failed');

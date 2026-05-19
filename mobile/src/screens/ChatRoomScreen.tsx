@@ -6,15 +6,16 @@ import {
   TouchableOpacity,
   FlatList,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Alert,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
+import { KeyboardStickyView } from 'react-native-keyboard-controller';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MainStackParamList, Message } from '../types';
-import { getMessages, sendMessageRest, deleteMessage } from '../services/chat';
+import { api } from '../services/api';
 import {
   connectSocket,
   joinChat,
@@ -35,6 +36,7 @@ function generateClientId(): string {
 
 export default function ChatRoomScreen({ route, navigation }: Props) {
   const { chatId, title } = route.params;
+  const insets = useSafeAreaInsets();
   const userId = useAuthStore((s) => s.user?._id);
   const setActiveChatId = useChatStore((s) => s.setActiveChatId);
   const markChatRead = useChatStore((s) => s.markChatRead);
@@ -71,7 +73,7 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
   }, []);
 
   const loadHistory = useCallback(async (before?: string) => {
-    const batch = await getMessages(chatId, { limit: 50, before });
+    const batch = await api.chats.messages.list(chatId, { limit: 50, before });
     if (batch.length < 50) setHasMore(false);
     if (before) {
       setMessages((prev) => [...batch, ...prev]);
@@ -173,7 +175,7 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
       mergeMessage(sent);
     } catch {
       try {
-        const sent = await sendMessageRest(chatId, text, clientMessageId);
+        const sent = await api.chats.messages.send(chatId, text, clientMessageId);
         mergeMessage(sent);
       } catch {
         setMessages((prev) =>
@@ -199,7 +201,7 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
       mergeMessage(sent);
     } catch {
       try {
-        const sent = await sendMessageRest(chatId, msg.content, msg.clientMessageId);
+        const sent = await api.chats.messages.send(chatId, msg.content, msg.clientMessageId);
         mergeMessage(sent);
       } catch {
         setMessages((prev) =>
@@ -245,7 +247,7 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
   const handleDelete = async (msg: Message, scope: 'me' | 'everyone') => {
     setDeletingId(msg._id);
     try {
-      await deleteMessage(chatId, msg._id, scope);
+      await api.chats.messages.delete(chatId, msg._id, scope);
       removeMessage(msg._id);
     } catch (e) {
       Alert.alert('Error', e instanceof Error ? e.message : 'Could not delete message');
@@ -262,17 +264,19 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     );
   }
 
+  const bottomInset = Math.max(insets.bottom, Platform.OS === 'android' ? 24 : 12);
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={90}
-    >
+    <View style={styles.container}>
       <FlatList
         ref={listRef}
+        style={styles.listFlex}
         data={messages}
         keyExtractor={(item) => item.clientMessageId ?? item._id}
         contentContainerStyle={styles.list}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        automaticallyAdjustKeyboardInsets
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
         ListHeaderComponent={
           hasMore ? (
@@ -307,30 +311,36 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
           );
         }}
       />
-      <View style={styles.inputRow}>
-        <TextInput
-          style={styles.input}
-          value={input}
-          onChangeText={setInput}
-          placeholder="Message"
-          multiline
-          maxLength={5000}
-        />
-        <TouchableOpacity
-          style={[styles.sendBtn, (!input.trim() || sending) && styles.sendDisabled]}
-          onPress={handleSend}
-          disabled={!input.trim() || sending}
-        >
-          <Text style={styles.sendText}>Send</Text>
-        </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
+      <KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
+        <View style={[styles.inputRow, { paddingBottom: bottomInset }]}>
+          <TextInput
+            style={styles.input}
+            value={input}
+            onChangeText={setInput}
+            placeholder="Message"
+            multiline
+            maxLength={5000}
+            onFocus={() => {
+              setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
+            }}
+          />
+          <TouchableOpacity
+            style={[styles.sendBtn, (!input.trim() || sending) && styles.sendDisabled]}
+            onPress={handleSend}
+            disabled={!input.trim() || sending}
+          >
+            <Text style={styles.sendText}>Send</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardStickyView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f1f5f9' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  listFlex: { flex: 1 },
   list: { padding: 12, flexGrow: 1 },
   loadMore: { padding: 12, alignItems: 'center' },
   loadMoreText: { color: '#2563eb', fontSize: 14 },
@@ -345,7 +355,8 @@ const styles = StyleSheet.create({
   retry: { color: '#fecaca', fontSize: 12, marginTop: 4 },
   inputRow: {
     flexDirection: 'row',
-    padding: 12,
+    paddingTop: 12,
+    paddingHorizontal: 12,
     backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#e2e8f0',

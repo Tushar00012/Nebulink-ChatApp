@@ -7,11 +7,13 @@ import { generateOtpCode, hashOtp, compareOtp } from '../utils/otp';
 import { signToken } from '../utils/jwt';
 import { normalizePhone } from '../utils/phone';
 import { assignUniqueUserCode } from '../utils/userCode';
-import { formatSelfUser, ensureUserProfile, applyLoginName } from '../utils/userResponse';
+import { formatSelfUser, ensureUserProfile } from '../utils/userResponse';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { checkOtpRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
+
+const authModeSchema = z.enum(['login', 'signup']);
 
 const nameSchema = z
   .string()
@@ -20,51 +22,23 @@ const nameSchema = z
   .max(32, 'Username must be at most 32 characters')
   .regex(/^[a-zA-Z0-9 ]+$/, 'Username can only contain letters, numbers, and spaces');
 
-const phoneSchema = z.object({
+const sendOtpSchema = z.object({
   phone: z.string().min(8).max(20).regex(/^\+?[0-9]+$/),
+  mode: authModeSchema,
   name: nameSchema.optional(),
 });
 
 const verifySchema = z.object({
   phone: z.string().min(8).max(20).regex(/^\+?[0-9]+$/),
   code: z.string().length(6).regex(/^[0-9]+$/),
+  mode: authModeSchema,
   name: nameSchema.optional(),
 });
 
-router.post('/send-otp', async (req, res: Response) => {
-  const parsed = phoneSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'Invalid phone number' });
-    return;
-  }
-
-  let phone: string;
-  try {
-    phone = normalizePhone(parsed.data.phone);
-  } catch {
-    res.status(400).json({ error: 'Invalid phone number' });
-    return;
-  }
-
-  const existingUser = await User.findOne({ phone });
-  if (existingUser) {
-    const user = await applyLoginName(existingUser, parsed.data.name);
-    const accessToken = signToken({
-      userId: user._id.toString(),
-      phone: user.phone,
-    });
-    res.json({
-      requiresOtp: false,
-      accessToken,
-      user: formatSelfUser(user),
-    });
-    return;
-  }
-
-  const rateKey = `${phone}:${req.ip ?? 'unknown'}`;
+async function createOtpSession(phone: string, ip: string | undefined): Promise<boolean> {
+  const rateKey = `${phone}:${ip ?? 'unknown'}`;
   if (!checkOtpRateLimit(rateKey)) {
-    res.status(429).json({ error: 'Too many OTP requests. Try again later.' });
-    return;
+    return false;
   }
 
   const code = generateOtpCode();
@@ -76,6 +50,49 @@ router.post('/send-otp', async (req, res: Response) => {
 
   if (env.NODE_ENV === 'development') {
     console.log(`[OTP] ${phone}: ${code}`);
+  }
+
+  return true;
+}
+
+router.post('/send-otp', async (req, res: Response) => {
+  const parsed = sendOtpSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid request' });
+    return;
+  }
+
+  let phone: string;
+  try {
+    phone = normalizePhone(parsed.data.phone);
+  } catch {
+    res.status(400).json({ error: 'Invalid phone number' });
+    return;
+  }
+
+  const { mode, name } = parsed.data;
+  const existingUser = await User.findOne({ phone });
+
+  if (mode === 'login') {
+    if (!existingUser) {
+      res.status(404).json({ error: 'No account found for this number' });
+      return;
+    }
+  } else {
+    if (!name) {
+      res.status(400).json({ error: 'Username is required' });
+      return;
+    }
+    if (existingUser) {
+      res.status(409).json({ error: 'Phone number already registered' });
+      return;
+    }
+  }
+
+  const sent = await createOtpSession(phone, req.ip);
+  if (!sent) {
+    res.status(429).json({ error: 'Too many OTP requests. Try again later.' });
+    return;
   }
 
   res.json({ requiresOtp: true, message: 'OTP sent' });
@@ -96,21 +113,7 @@ router.post('/verify-otp', async (req, res: Response) => {
     return;
   }
 
-  const { code, name } = parsed.data;
-
-  const existingUser = await User.findOne({ phone });
-  if (existingUser) {
-    const user = await applyLoginName(existingUser, name);
-    const accessToken = signToken({
-      userId: user._id.toString(),
-      phone: user.phone,
-    });
-    res.json({
-      accessToken,
-      user: formatSelfUser(user),
-    });
-    return;
-  }
+  const { code, mode, name } = parsed.data;
 
   const session = await OtpSession.findOne({ phone }).sort({ expiresAt: -1 });
   if (!session || session.expiresAt < new Date()) {
@@ -124,29 +127,47 @@ router.post('/verify-otp', async (req, res: Response) => {
     return;
   }
 
+  await OtpSession.deleteMany({ phone });
+
+  const existingUser = await User.findOne({ phone });
+
+  if (mode === 'login') {
+    if (!existingUser) {
+      res.status(404).json({ error: 'No account found for this number' });
+      return;
+    }
+    const profile = await ensureUserProfile(existingUser);
+    const accessToken = signToken({ userId: profile._id.toString(), phone: profile.phone });
+    res.json({
+      accessToken,
+      user: formatSelfUser(profile),
+    });
+    return;
+  }
+
+  if (existingUser) {
+    res.status(409).json({ error: 'Phone number already registered' });
+    return;
+  }
+
   if (!name) {
     res.status(400).json({ error: 'Username is required for new accounts' });
     return;
   }
 
-  await OtpSession.deleteMany({ phone });
-
-  let user = await User.findOne({ phone });
-  if (!user) {
-    const userCode = await assignUniqueUserCode();
-    try {
-      user = await User.create({ phone, name, userCode });
-    } catch (err: unknown) {
-      const mongoErr = err as { code?: number };
-      if (mongoErr.code === 11000) {
-        user = await User.findOne({ phone });
-      }
-      if (!user) throw err;
+  const userCode = await assignUniqueUserCode();
+  let user;
+  try {
+    user = await User.create({ phone, name, userCode });
+  } catch (err: unknown) {
+    const mongoErr = err as { code?: number };
+    if (mongoErr.code === 11000) {
+      res.status(409).json({ error: 'Phone number already registered' });
+      return;
     }
+    throw err;
   }
 
-  user.name = name;
-  await user.save();
   const profile = await ensureUserProfile(user);
   const accessToken = signToken({ userId: profile._id.toString(), phone: profile.phone });
 

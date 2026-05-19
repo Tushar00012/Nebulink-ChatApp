@@ -11,49 +11,32 @@ import {
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../types';
-import { loginWithPhone } from '../services/auth';
-import { useAuthStore } from '../store/authStore';
+import { api } from '../services/api';
+import {
+  COUNTRY_CODE,
+  PHONE_DIGITS_LENGTH,
+  toFullPhone,
+  sanitizeDigits,
+  sanitizeUsername,
+  isValidIndianPhone,
+  isValidUsername,
+} from '../utils/phoneInput';
 
-type Props = NativeStackScreenProps<AuthStackParamList, 'Phone'>;
+type Props = NativeStackScreenProps<AuthStackParamList, 'Signup'>;
 
-const COUNTRY_CODE = '+91';
-const PHONE_DIGITS_LENGTH = 10;
-
-function toFullPhone(digits: string): string {
-  return `${COUNTRY_CODE}${digits}`;
-}
-
-function sanitizeDigits(value: string): string {
-  return value.replace(/\D/g, '').slice(0, PHONE_DIGITS_LENGTH);
-}
-
-function sanitizeUsername(value: string): string {
-  return value.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 32);
-}
-
-function isValidUsername(name: string): boolean {
-  const trimmed = name.trim();
-  return trimmed.length >= 2 && trimmed.length <= 32 && /^[a-zA-Z0-9 ]+$/.test(trimmed);
-}
-
-export default function PhoneScreen({ navigation }: Props) {
+export default function SignupScreen({ navigation }: Props) {
   const [digits, setDigits] = useState('');
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const setAuth = useAuthStore((s) => s.setAuth);
 
   const handleContinue = async () => {
-    if (digits.length !== PHONE_DIGITS_LENGTH) {
-      setError('Enter a valid 10-digit mobile number');
-      return;
-    }
-    if (!/^[6-9]\d{9}$/.test(digits)) {
-      setError('Enter a valid Indian mobile number');
-      return;
-    }
     if (!isValidUsername(username)) {
       setError('Enter a username (2–32 letters, numbers, or spaces)');
+      return;
+    }
+    if (!isValidIndianPhone(digits)) {
+      setError('Enter a valid 10-digit mobile number');
       return;
     }
     const formatted = toFullPhone(digits);
@@ -61,14 +44,10 @@ export default function PhoneScreen({ navigation }: Props) {
     setError('');
     setLoading(true);
     try {
-      const result = await loginWithPhone(formatted, name);
-      if (!result.requiresOtp) {
-        await setAuth(result.accessToken, result.user);
-        return;
-      }
-      navigation.navigate('Otp', { phone: formatted, name });
+      await api.auth.signupSendOtp(formatted, name);
+      navigation.navigate('Otp', { phone: formatted, name, mode: 'signup' });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Login failed');
+      setError(e instanceof Error ? e.message : 'Signup failed');
     } finally {
       setLoading(false);
     }
@@ -94,7 +73,7 @@ export default function PhoneScreen({ navigation }: Props) {
         <Text style={styles.prefix}>{COUNTRY_CODE}</Text>
         <TextInput
           style={styles.input}
-          placeholder="Enter Mobile Number"
+          placeholder="Enter mobile number"
           keyboardType="number-pad"
           autoComplete="tel-national"
           maxLength={PHONE_DIGITS_LENGTH}
@@ -103,13 +82,13 @@ export default function PhoneScreen({ navigation }: Props) {
           editable={!loading}
         />
       </View>
-      <Text style={styles.hint}>Existing users sign in instantly. New users receive an OTP.</Text>
+      <Text style={styles.hint}>Use a new number that is not already registered.</Text>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <TouchableOpacity style={styles.button} onPress={handleContinue} disabled={loading}>
         {loading ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.buttonText}>Continue</Text>
+          <Text style={styles.buttonText}>Send OTP</Text>
         )}
       </TouchableOpacity>
     </KeyboardAvoidingView>
